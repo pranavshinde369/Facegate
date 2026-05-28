@@ -82,35 +82,21 @@ export default function EnrollScreen() {
             setStatus(`⚠ Photo ${i + 1} — no image captured`);
           } else {
             setStatus(`Processing photo ${i + 1} through AI...`);
-            const imgData = await uriToPixelArray(uri);
 
-            if (!imgData) {
-              setStatus(`⚠ Photo ${i + 1} — image decode failed`);
+            // HIGH PERFORMANCE PATH: No pixel data sent over bridge
+            const bbox = await InferenceService.detectFaceFast(uri);
+
+            if (!bbox || bbox[4] <= 0.5) {
+              setStatus(`⚠ Photo ${i + 1} — no face detected, try better lighting`);
             } else {
-              const detectorInput = InferenceService.prepareDetectorInput(
-                imgData.pixels,
-                imgData.width,
-                imgData.height,
-              );
-              const bbox = await InferenceService.detectFace(detectorInput);
-
-              if (!bbox || bbox[4] <= 0.5) {
-                setStatus(`⚠ Photo ${i + 1} — no face detected, try better lighting`);
+              quality = bbox[4];
+              const realEmbedding = await InferenceService.getEmbeddingFast(uri, bbox);
+              
+              if (realEmbedding && realEmbedding.length === 128) {
+                embedding = realEmbedding;
+                setStatus(`✓ Photo ${i + 1} — face detected (${(quality * 100).toFixed(0)}% confidence)`);
               } else {
-                quality = bbox[4];
-                const faceInput = InferenceService.prepareFaceInput(
-                  imgData.pixels,
-                  imgData.width,
-                  imgData.height,
-                  bbox,
-                );
-                const realEmbedding = await InferenceService.getEmbedding(faceInput);
-                if (realEmbedding && realEmbedding.length === 128) {
-                  embedding = realEmbedding;
-                  setStatus(`✓ Photo ${i + 1} — face detected (${(quality * 100).toFixed(0)}% confidence)`);
-                } else {
-                  setStatus(`⚠ Photo ${i + 1} — embedding extraction failed`);
-                }
+                setStatus(`⚠ Photo ${i + 1} — embedding extraction failed`);
               }
             }
           }

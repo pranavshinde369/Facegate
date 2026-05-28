@@ -92,9 +92,6 @@ public class OnnxModule extends ReactContextBaseJavaModule {
             inferenceTimings.put(modelName, inferenceMs);
 
             // Bug #4 fix: Concatenate ALL output tensors, not just the first one.
-            // UltraFace has two outputs: scores [1,4420,2] and boxes [1,4420,4].
-            // MobileFaceNet has one output: embedding [1,128].
-            // We flatten all outputs into a single array for the JS side.
             WritableArray out = Arguments.createArray();
             for (int i = 0; i < result.size(); i++) {
                 Object outputValue = result.get(i).getValue();
@@ -106,6 +103,165 @@ public class OnnxModule extends ReactContextBaseJavaModule {
             promise.resolve(out);
         } catch (Exception e) {
             promise.reject("INFERENCE_ERROR", e.getMessage());
+        }
+    }
+
+    /**
+     * HIGH-PERFORMANCE: Detect face directly from image URI.
+     * Does decode + resize + normalize + CHW reformat + ONNX inference ALL on Java side.
+     * Avoids the massive overhead of passing 1.2M pixel values over the RN bridge.
+     *
+     * Returns the flattened output array (scores + boxes for UltraFace).
+     */
+    @ReactMethod
+    public void detectFaceFromUri(String modelName, String uri, Promise promise) {
+        try {
+            OrtSession session = sessions.get(modelName);
+            if (session == null) {
+                promise.reject("NOT_LOADED", "Model not loaded: " + modelName);
+                return;
+            }
+
+            String filePath = uri.replace("file://", "");
+            Bitmap original = BitmapFactory.decodeFile(filePath);
+            if (original == null) {
+                promise.reject("DECODE_ERR", "Failed to decode image");
+                return;
+            }
+
+            // Resize to detector input: 320x240
+            int targetW = 320, targetH = 240;
+            Bitmap scaled = Bitmap.createScaledBitmap(original, targetW, targetH, true);
+
+            // Convert to CHW float array with /255.0 normalization
+            float[] inputData = new float[3 * targetH * targetW];
+            for (int y = 0; y < targetH; y++) {
+                for (int x = 0; x < targetW; x++) {
+                    int pixel = scaled.getPixel(x, y);
+                    float r = ((pixel >> 16) & 0xFF) / 255.0f;
+                    float g = ((pixel >> 8) & 0xFF) / 255.0f;
+                    float b = (pixel & 0xFF) / 255.0f;
+
+                    inputData[0 * targetH * targetW + y * targetW + x] = r;
+                    inputData[1 * targetH * targetW + y * targetW + x] = g;
+                    inputData[2 * targetH * targetW + y * targetW + x] = b;
+                }
+            }
+
+            // Run inference
+            long[] dims = {1, 3, targetH, targetW};
+            OnnxTensor tensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(inputData), dims);
+            Map<String, OnnxTensor> inputs = new HashMap<>();
+            String inputName = session.getInputNames().iterator().next();
+            inputs.put(inputName, tensor);
+
+            long startTime = System.currentTimeMillis();
+            OrtSession.Result result = session.run(inputs);
+            long inferenceMs = System.currentTimeMillis() - startTime;
+            inferenceTimings.put(modelName, inferenceMs);
+
+            // Flatten all outputs
+            WritableArray out = Arguments.createArray();
+            for (int i = 0; i < result.size(); i++) {
+                flattenOutput(result.get(i).getValue(), out);
+            }
+
+            // Also return image dimensions for bbox scaling
+            out.pushDouble(original.getWidth());  // original width
+            out.pushDouble(original.getHeight()); // original height
+
+            tensor.close();
+            result.close();
+            if (original != scaled) original.recycle();
+            scaled.recycle();
+
+            promise.resolve(out);
+        } catch (Exception e) {
+            promise.reject("DETECT_ERR", e.getMessage());
+        }
+    }
+
+    /**
+     * HIGH-PERFORMANCE: Extract face embedding directly from image URI + bounding box.
+     * Crops the face region, resizes to 112x112, normalizes with (p/255 - 0.5)/0.5,
+     * converts to CHW, and runs MobileFaceNet — ALL on Java side.
+     *
+     * Returns the 128-d embedding array.
+     */
+    @ReactMethod
+    public void extractEmbeddingFromUri(String modelName, String uri,
+                                         double x1, double y1, double x2, double y2,
+                                         Promise promise) {
+        try {
+            OrtSession session = sessions.get(modelName);
+            if (session == null) {
+                promise.reject("NOT_LOADED", "Model not loaded: " + modelName);
+                return;
+            }
+
+            String filePath = uri.replace("file://", "");
+            Bitmap original = BitmapFactory.decodeFile(filePath);
+            if (original == null) {
+                promise.reject("DECODE_ERR", "Failed to decode image");
+                return;
+            }
+
+            int imgW = original.getWidth();
+            int imgH = original.getHeight();
+
+            // Convert normalized bbox [0-1] to pixel coordinates
+            int cropX = Math.max(0, (int)(x1 * imgW));
+            int cropY = Math.max(0, (int)(y1 * imgH));
+            int cropW = Math.max(1, Math.min((int)((x2 - x1) * imgW), imgW - cropX));
+            int cropH = Math.max(1, Math.min((int)((y2 - y1) * imgH), imgH - cropY));
+
+            // Crop and resize to 112x112
+            Bitmap cropped = Bitmap.createBitmap(original, cropX, cropY, cropW, cropH);
+            int targetSize = 112;
+            Bitmap face = Bitmap.createScaledBitmap(cropped, targetSize, targetSize, true);
+
+            // Convert to CHW float array with MobileFaceNet normalization: (p/255 - 0.5) / 0.5
+            float[] inputData = new float[3 * targetSize * targetSize];
+            for (int y = 0; y < targetSize; y++) {
+                for (int x = 0; x < targetSize; x++) {
+                    int pixel = face.getPixel(x, y);
+                    float r = (((pixel >> 16) & 0xFF) / 255.0f - 0.5f) / 0.5f;
+                    float g = (((pixel >> 8) & 0xFF) / 255.0f - 0.5f) / 0.5f;
+                    float b = ((pixel & 0xFF) / 255.0f - 0.5f) / 0.5f;
+
+                    inputData[0 * targetSize * targetSize + y * targetSize + x] = r;
+                    inputData[1 * targetSize * targetSize + y * targetSize + x] = g;
+                    inputData[2 * targetSize * targetSize + y * targetSize + x] = b;
+                }
+            }
+
+            // Run inference
+            long[] dims = {1, 3, targetSize, targetSize};
+            OnnxTensor tensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(inputData), dims);
+            Map<String, OnnxTensor> inputs = new HashMap<>();
+            String inputName = session.getInputNames().iterator().next();
+            inputs.put(inputName, tensor);
+
+            long startTime = System.currentTimeMillis();
+            OrtSession.Result result = session.run(inputs);
+            long inferenceMs = System.currentTimeMillis() - startTime;
+            inferenceTimings.put(modelName, inferenceMs);
+
+            // Flatten output (should be [1,128] → 128 floats)
+            WritableArray out = Arguments.createArray();
+            for (int i = 0; i < result.size(); i++) {
+                flattenOutput(result.get(i).getValue(), out);
+            }
+
+            tensor.close();
+            result.close();
+            original.recycle();
+            if (cropped != face) cropped.recycle();
+            face.recycle();
+
+            promise.resolve(out);
+        } catch (Exception e) {
+            promise.reject("EMBED_ERR", e.getMessage());
         }
     }
 
@@ -138,16 +294,14 @@ public class OnnxModule extends ReactContextBaseJavaModule {
     }
 
     /**
-     * Bug #1 fix: Proper image decoding using Android's BitmapFactory.
-     * Decodes a JPEG/PNG file into an RGBA pixel array at the specified dimensions.
-     * Returns a flat array of [R, G, B, A, R, G, B, A, ...] values (0-255).
+     * Proper image decoding using Android's BitmapFactory.
+     * Kept as fallback but prefer detectFaceFromUri / extractEmbeddingFromUri
+     * for performance (avoids massive bridge data transfer).
      */
     @ReactMethod
     public void decodeImageToPixels(String uri, int targetW, int targetH, Promise promise) {
         try {
             String filePath = uri.replace("file://", "");
-
-            // Decode with downsampling for memory efficiency
             BitmapFactory.Options opts = new BitmapFactory.Options();
             opts.inPreferredConfig = Bitmap.Config.ARGB_8888;
             Bitmap original = BitmapFactory.decodeFile(filePath, opts);
@@ -157,25 +311,20 @@ public class OnnxModule extends ReactContextBaseJavaModule {
                 return;
             }
 
-            // Scale to target dimensions
             Bitmap scaled = Bitmap.createScaledBitmap(original, targetW, targetH, true);
 
-            // Extract RGBA pixels
             WritableArray arr = Arguments.createArray();
             for (int y = 0; y < targetH; y++) {
                 for (int x = 0; x < targetW; x++) {
                     int pixel = scaled.getPixel(x, y);
-                    arr.pushInt((pixel >> 16) & 0xFF); // R
-                    arr.pushInt((pixel >> 8) & 0xFF);  // G
-                    arr.pushInt(pixel & 0xFF);          // B
-                    arr.pushInt(255);                    // A
+                    arr.pushInt((pixel >> 16) & 0xFF);
+                    arr.pushInt((pixel >> 8) & 0xFF);
+                    arr.pushInt(pixel & 0xFF);
+                    arr.pushInt(255);
                 }
             }
 
-            // Recycle bitmaps to free native memory
-            if (original != scaled) {
-                original.recycle();
-            }
+            if (original != scaled) original.recycle();
             scaled.recycle();
 
             promise.resolve(arr);

@@ -219,19 +219,11 @@ export default function VerifyScreen() {
         setStatusText(`Analyzing face ${i + 1} of ${photos.length}...`);
         setScanProgress(0.7 + (i / photos.length) * 0.25);
         try {
-          const imgData = await uriToPixelArray(photos[i]);
-          if (imgData) {
-            const detInput = InferenceService.prepareDetectorInput(
-              imgData.pixels, imgData.width, imgData.height,
-            );
-            const bbox = await InferenceService.detectFace(detInput);
-            if (bbox && bbox[4] > 0.5) {
-              const faceInput = InferenceService.prepareFaceInput(
-                imgData.pixels, imgData.width, imgData.height, bbox,
-              );
-              const emb = await InferenceService.getEmbedding(faceInput);
-              if (emb && emb.length === 128) embeddings.push(emb);
-            }
+          // HIGH PERFORMANCE PATH: No pixel data sent over bridge
+          const bbox = await InferenceService.detectFaceFast(photos[i]);
+          if (bbox && bbox[4] > 0.5) {
+            const emb = await InferenceService.getEmbeddingFast(photos[i], bbox);
+            if (emb && emb.length === 128) embeddings.push(emb);
           }
         } catch (e) {
           console.log('Frame error:', e);
