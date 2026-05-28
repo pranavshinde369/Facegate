@@ -1,4 +1,4 @@
-import React, {useEffect, useState} from 'react';
+import React, {useEffect, useState, useRef} from 'react';
 import {
   View,
   Text,
@@ -26,6 +26,7 @@ export default function HomeScreen() {
   const [pendingSync, setPendingSync] = useState(0);
   const [modelSizeMB, setModelSizeMB] = useState(0);
   const [tapCount, setTapCount] = useState(0);
+  const tapTimerRef = useRef<any>(null);
 
   useEffect(() => {
     initApp();
@@ -60,12 +61,16 @@ export default function HomeScreen() {
   };
 
   const handleTripleTap = () => {
+    // Reset tap count after 800ms of no taps
+    if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
     const newCount = tapCount + 1;
     setTapCount(newCount);
     if (newCount >= 3) {
       setTapCount(0);
       // Navigate to debug — add DebugScreen later
       console.log('Debug mode activated');
+    } else {
+      tapTimerRef.current = setTimeout(() => setTapCount(0), 800);
     }
   };
 

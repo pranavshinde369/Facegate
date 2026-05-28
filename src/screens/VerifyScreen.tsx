@@ -190,7 +190,7 @@ export default function VerifyScreen() {
 
         if (result.didCancel || result.errorCode) {
           setStatusText('Cancelled — restarting liveness check');
-          setTimeout(() => startLivenessChallenge(), 800);
+          setTimeout(() => startLivenessChallenge(0), 800);
           return;
         }
 
@@ -206,7 +206,7 @@ export default function VerifyScreen() {
     } catch (error) {
       console.error('Verification error:', error);
       setStatusText('Error — restarting');
-      setTimeout(() => startLivenessChallenge(), 1500);
+      setTimeout(() => startLivenessChallenge(0), 1500);
     }
   };
 
@@ -241,7 +241,7 @@ export default function VerifyScreen() {
       // No mock fallback — require at least 1 real embedding
       if (embeddings.length === 0) {
         setStatusText('No face detected — ensure good lighting');
-        setTimeout(() => startLivenessChallenge(), 2000);
+        setTimeout(() => startLivenessChallenge(0), 2000);
         return;
       }
 
@@ -285,7 +285,7 @@ export default function VerifyScreen() {
     } catch (error) {
       console.error('Recognition error:', error);
       setStatusText('Recognition failed — retrying');
-      setTimeout(() => startLivenessChallenge(), 1500);
+      setTimeout(() => startLivenessChallenge(0), 1500);
     }
   };
 
