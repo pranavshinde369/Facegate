@@ -1,65 +1,68 @@
 import {NativeModules} from 'react-native';
-import RNFS from 'react-native-fs';
 
-// Convert image URI to base64 then to pixel array
-export async function uriToPixelArray(uri: string): Promise<{
+const {OnnxModule} = NativeModules;
+
+/**
+ * Convert an image URI to a decoded RGBA pixel array using native Android BitmapFactory.
+ *
+ * Previously this tried to "decode" JPEG bytes by reading raw compressed data as pixel
+ * values — which produced garbage input for ONNX. Now delegates to Java side for proper
+ * JPEG/PNG decoding via BitmapFactory.
+ *
+ * @param uri - file:// URI to the image
+ * @param targetWidth - desired output width (default 480)
+ * @param targetHeight - desired output height (default 640)
+ * @returns Decoded RGBA pixel array with correct dimensions, or null on failure
+ */
+export async function uriToPixelArray(
+  uri: string,
+  targetWidth: number = 480,
+  targetHeight: number = 640,
+): Promise<{
   pixels: number[];
   width: number;
   height: number;
 } | null> {
   try {
-    // Read file as base64
-    const cleanUri = uri.replace('file://', '');
-    const base64 = await RNFS.readFile(cleanUri, 'base64');
+    // Use native Android BitmapFactory for proper JPEG/PNG decoding
+    const pixelArray: number[] = await OnnxModule.decodeImageToPixels(
+      uri,
+      targetWidth,
+      targetHeight,
+    );
 
-    // Decode base64 to bytes
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
+    if (!pixelArray || pixelArray.length === 0) {
+      console.error('Native image decode returned empty array');
+      return null;
     }
 
-    // For JPEG, we need to parse image dimensions
-    // Simple approach: use fixed size and normalize
-    // Width/height estimation from JPEG header
-    let width = 480;
-    let height = 640;
-
-    // Find JPEG SOF marker for dimensions
-    for (let i = 0; i < bytes.length - 8; i++) {
-      if (bytes[i] === 0xff &&
-         (bytes[i+1] === 0xc0 || bytes[i+1] === 0xc2)) {
-        height = (bytes[i+5] << 8) | bytes[i+6];
-        width = (bytes[i+7] << 8) | bytes[i+8];
-        break;
-      }
-    }
-
-    // Convert bytes to pixel array (simplified RGB extraction)
-    // In production use a proper JPEG decoder
-    const pixels: number[] = [];
-    const step = Math.max(1, Math.floor(bytes.length / (width * height * 3)));
-    for (let i = 0; i < width * height * 4; i += 4) {
-      const byteIdx = Math.min(i * step, bytes.length - 3);
-      pixels.push(bytes[byteIdx]);       // R
-      pixels.push(bytes[byteIdx + 1]);   // G
-      pixels.push(bytes[byteIdx + 2]);   // B
-      pixels.push(255);                   // A
-    }
-
-    return {pixels, width, height};
+    return {
+      pixels: pixelArray,
+      width: targetWidth,
+      height: targetHeight,
+    };
   } catch (error) {
     console.error('Image processing error:', error);
     return null;
   }
 }
 
+/**
+ * Calculate average brightness from RGBA pixel data.
+ * Samples up to 1000 pixels for performance.
+ * Uses luminance formula: 0.299*R + 0.587*G + 0.114*B
+ */
 export function calculateBrightness(pixels: number[]): number {
   if (pixels.length === 0) return 128;
+  const maxSamples = Math.min(Math.floor(pixels.length / 4), 1000);
   let sum = 0;
-  const samples = Math.min(pixels.length, 1000);
-  for (let i = 0; i < samples; i++) {
-    sum += pixels[i];
+  for (let i = 0; i < maxSamples; i++) {
+    const idx = i * 4; // RGBA stride
+    const r = pixels[idx];
+    const g = pixels[idx + 1];
+    const b = pixels[idx + 2];
+    // Standard luminance weighting
+    sum += 0.299 * r + 0.587 * g + 0.114 * b;
   }
-  return sum / samples;
+  return sum / maxSamples;
 }
