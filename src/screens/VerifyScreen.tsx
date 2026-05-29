@@ -124,7 +124,7 @@ export default function VerifyScreen() {
     const baseProgress = step === 0 ? 0 : 0.5;
     const targetProgress = step === 0 ? 0.5 : 1.0;
     let progress = baseProgress;
-    const increment = 0.025; // Slower per tick for more realistic feel
+    const increment = 0.1; // Faster tick to prevent timeouts and speed up check
 
     livenessIntervalRef.current = setInterval(() => {
       progress += increment;
@@ -173,8 +173,8 @@ export default function VerifyScreen() {
     try {
       const photos: string[] = [];
 
-      for (let i = 0; i < 3; i++) {
-        setStatusText(`Photo ${i + 1} of 3 — stay still`);
+      for (let i = 0; i < 1; i++) {
+        setStatusText(`Photo ${i + 1} of 1 — stay still`);
 
         const result = await new Promise<any>(resolve => {
           launchCamera(
@@ -196,7 +196,7 @@ export default function VerifyScreen() {
 
         const uri = result.assets?.[0]?.uri;
         if (uri) photos.push(uri);
-        setScanProgress((i + 1) / 3 * 0.6);
+        setScanProgress((i + 1) / 1 * 0.6);
       }
 
       setStatusText('Running AI recognition...');

@@ -30,7 +30,7 @@ export default function EnrollScreen() {
   const [frameQualities, setFrameQualities] = useState<number[]>([]);
   const [status, setStatus] = useState('Enter details then capture face photos');
 
-  const REQUIRED_FRAMES = 5;
+  const REQUIRED_FRAMES = 1;
 
   const generateId = () =>
     `id_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -112,8 +112,8 @@ export default function EnrollScreen() {
         }
       }
 
-      // Require at least 3 successful face detections out of 5 attempts
-      const MIN_SUCCESSFUL = 3;
+      // Require at least 1 successful face detections out of 1 attempts
+      const MIN_SUCCESSFUL = 1;
       if (embeddings.length < MIN_SUCCESSFUL) {
         Alert.alert(
           'Face Detection Failed',
@@ -137,7 +137,7 @@ export default function EnrollScreen() {
   };
 
   const saveIdentity = async () => {
-    const MIN_SUCCESSFUL = 3;
+    const MIN_SUCCESSFUL = 1;
     if (capturedEmbeddings.length < MIN_SUCCESSFUL) {
       Alert.alert('Not Ready', `Need at least ${MIN_SUCCESSFUL} successful face captures first`);
       return;
@@ -262,8 +262,8 @@ export default function EnrollScreen() {
           )}
         </TouchableOpacity>
 
-        {/* Save button — show when we have 3+ successful face detections */}
-        {capturedEmbeddings.length >= 3 && (
+        {/* Save button — show when we have 1+ successful face detections */}
+        {capturedEmbeddings.length >= 1 && (
           <TouchableOpacity
             style={[styles.saveButton, saving && styles.buttonDisabled]}
             onPress={saveIdentity}
