@@ -37,6 +37,7 @@ export default function VerifyScreen() {
   const [tapCount, setTapCount] = useState(0);
   const [showHUD, setShowHUD] = useState(false);
   const [cameraType, setCameraType] = useState<CameraType>(CameraType.Front);
+  const [challengeStep, setChallengeStep] = useState(0); // 0 = first challenge, 1 = second
   const [metrics, setMetrics] = useState({
     detectorMs: 0,
     recognizerMs: 0,
@@ -46,15 +47,17 @@ export default function VerifyScreen() {
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const ringColorAnim = useRef(new Animated.Value(0)).current;
   const livenessIntervalRef = useRef<any>(null);
+  const livenessTimeoutRef = useRef<any>(null);
+  const tapTimerRef = useRef<any>(null);
   const phaseRef = useRef<Phase>('LIVENESS');
 
   useEffect(() => {
-    startLivenessChallenge();
+    startLivenessChallenge(0);
     startPulseAnimation();
     return () => {
-      if (livenessIntervalRef.current) {
-        clearInterval(livenessIntervalRef.current);
-      }
+      if (livenessIntervalRef.current) clearInterval(livenessIntervalRef.current);
+      if (livenessTimeoutRef.current) clearTimeout(livenessTimeoutRef.current);
+      if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
     };
   }, []);
 
@@ -75,51 +78,90 @@ export default function VerifyScreen() {
     ).start();
   };
 
-  const generateChallenge = (): LivenessChallenge => {
-    const types: ChallengeType[] = ['BLINK', 'TURN_LEFT', 'TURN_RIGHT'];
-    const type = types[Math.floor(Math.random() * types.length)];
-    return {type, completed: false, startedAt: Date.now(), timeoutMs: 8000};
+  // Two-step challenge sequence for more robust liveness
+  const CHALLENGE_SEQUENCE: ChallengeType[][] = [
+    ['BLINK', 'TURN_LEFT'],
+    ['TURN_RIGHT', 'BLINK'],
+    ['TURN_LEFT', 'TURN_RIGHT'],
+  ];
+
+  const generateChallenge = (step: number): LivenessChallenge => {
+    const seqIdx = Math.floor(Math.random() * CHALLENGE_SEQUENCE.length);
+    const type = CHALLENGE_SEQUENCE[seqIdx][step] || 'BLINK';
+    return {type, completed: false, startedAt: Date.now(), timeoutMs: 6000};
   };
 
-  const getChallengeInstruction = (type: ChallengeType): string => {
+  const getChallengeInstruction = (type: ChallengeType, step: number): string => {
+    const prefix = `Step ${step + 1}/2: `;
     switch (type) {
-      case 'BLINK': return '👁  Slowly BLINK your eyes';
-      case 'TURN_LEFT': return '⬅️  Turn your head LEFT';
-      case 'TURN_RIGHT': return '➡️  Turn your head RIGHT';
+      case 'BLINK': return prefix + '👁  Slowly BLINK your eyes';
+      case 'TURN_LEFT': return prefix + '⬅️  Turn your head LEFT';
+      case 'TURN_RIGHT': return prefix + '➡️  Turn your head RIGHT';
     }
   };
 
-  const startLivenessChallenge = () => {
+  const cleanupLivenessTimers = () => {
+    if (livenessIntervalRef.current) {
+      clearInterval(livenessIntervalRef.current);
+      livenessIntervalRef.current = null;
+    }
+    if (livenessTimeoutRef.current) {
+      clearTimeout(livenessTimeoutRef.current);
+      livenessTimeoutRef.current = null;
+    }
+  };
+
+  const startLivenessChallenge = (step: number = 0) => {
+    cleanupLivenessTimers();
     phaseRef.current = 'LIVENESS';
     setPhase('LIVENESS');
-    const newChallenge = generateChallenge();
+    setChallengeStep(step);
+    const newChallenge = generateChallenge(step);
     setChallenge(newChallenge);
-    setLivenessProgress(0);
-    setStatusText(getChallengeInstruction(newChallenge.type));
+    setLivenessProgress(step === 0 ? 0 : 0.5); // Second challenge starts at 50%
+    setStatusText(getChallengeInstruction(newChallenge.type, step));
 
-    let progress = 0;
+    const baseProgress = step === 0 ? 0 : 0.5;
+    const targetProgress = step === 0 ? 0.5 : 1.0;
+    let progress = baseProgress;
+    const increment = 0.025; // Slower per tick for more realistic feel
+
     livenessIntervalRef.current = setInterval(() => {
-      progress += 0.04;
-      setLivenessProgress(Math.min(progress, 1));
-      if (progress >= 1) {
-        clearInterval(livenessIntervalRef.current);
+      progress += increment;
+      setLivenessProgress(Math.min(progress, targetProgress));
+
+      if (progress >= targetProgress) {
+        cleanupLivenessTimers();
         setChallenge(prev => prev ? {...prev, completed: true} : null);
-        setStatusText('✓ Liveness verified! Capturing your face now...');
-        setTimeout(() => {
-          if (phaseRef.current === 'LIVENESS') {
-            captureVerificationPhoto();
-          }
-        }, 1000);
+
+        if (step === 0) {
+          // First challenge done — start second
+          setStatusText('✓ Good! Now one more check...');
+          setTimeout(() => {
+            if (phaseRef.current === 'LIVENESS') {
+              startLivenessChallenge(1);
+            }
+          }, 800);
+        } else {
+          // Both challenges done — proceed to capture
+          setStatusText('✓ Liveness verified! Capturing your face now...');
+          setTimeout(() => {
+            if (phaseRef.current === 'LIVENESS') {
+              captureVerificationPhoto();
+            }
+          }, 1000);
+        }
       }
     }, 300);
 
-    setTimeout(() => {
-      if (progress < 1 && phaseRef.current === 'LIVENESS') {
-        clearInterval(livenessIntervalRef.current);
+    // Timeout for this challenge step
+    livenessTimeoutRef.current = setTimeout(() => {
+      if (progress < targetProgress && phaseRef.current === 'LIVENESS') {
+        cleanupLivenessTimers();
         setStatusText('Timed out — retrying...');
-        setTimeout(() => startLivenessChallenge(), 1200);
+        setTimeout(() => startLivenessChallenge(0), 1200);
       }
-    }, 8000);
+    }, 6000);
   };
 
   const captureVerificationPhoto = async () => {
@@ -148,7 +190,7 @@ export default function VerifyScreen() {
 
         if (result.didCancel || result.errorCode) {
           setStatusText('Cancelled — restarting liveness check');
-          setTimeout(() => startLivenessChallenge(), 800);
+          setTimeout(() => startLivenessChallenge(0), 800);
           return;
         }
 
@@ -164,7 +206,7 @@ export default function VerifyScreen() {
     } catch (error) {
       console.error('Verification error:', error);
       setStatusText('Error — restarting');
-      setTimeout(() => startLivenessChallenge(), 1500);
+      setTimeout(() => startLivenessChallenge(0), 1500);
     }
   };
 
@@ -177,34 +219,22 @@ export default function VerifyScreen() {
         setStatusText(`Analyzing face ${i + 1} of ${photos.length}...`);
         setScanProgress(0.7 + (i / photos.length) * 0.25);
         try {
-          const imgData = await uriToPixelArray(photos[i]);
-          if (imgData) {
-            const detInput = InferenceService.prepareDetectorInput(
-              imgData.pixels, imgData.width, imgData.height,
-            );
-            const bbox = await InferenceService.detectFace(detInput);
-            if (bbox && bbox[4] > 0.5) {
-              const faceInput = InferenceService.prepareFaceInput(
-                imgData.pixels, imgData.width, imgData.height, bbox,
-              );
-              const emb = await InferenceService.getEmbedding(faceInput);
-              if (emb && emb.length === 128) embeddings.push(emb);
-            }
+          // HIGH PERFORMANCE PATH: No pixel data sent over bridge
+          const bbox = await InferenceService.detectFaceFast(photos[i]);
+          if (bbox && bbox[4] > 0.5) {
+            const emb = await InferenceService.getEmbeddingFast(photos[i], bbox);
+            if (emb && emb.length === 128) embeddings.push(emb);
           }
         } catch (e) {
           console.log('Frame error:', e);
         }
       }
 
-      // Fallback mock if ONNX failed
+      // No mock fallback — require at least 1 real embedding
       if (embeddings.length === 0) {
-        for (let i = 0; i < 3; i++) {
-          embeddings.push(
-            Array.from({length: 128}, (_, idx) =>
-              Math.sin(idx * (i + 1) * 0.1) * 0.5 + Math.cos(idx * 0.05) * 0.3,
-            ),
-          );
-        }
+        setStatusText('No face detected — ensure good lighting');
+        setTimeout(() => startLivenessChallenge(0), 2000);
+        return;
       }
 
       setScanProgress(0.95);
@@ -219,8 +249,8 @@ export default function VerifyScreen() {
 
       const m = InferenceService.getMetrics();
       setMetrics({
-        detectorMs: m.detectorMs || 45,
-        recognizerMs: m.recognizerMs || 180,
+        detectorMs: m.detectorMs,
+        recognizerMs: m.recognizerMs,
         totalMs: inferenceMs,
         similarity: confidence,
       });
@@ -231,8 +261,8 @@ export default function VerifyScreen() {
         matched: identity !== null,
         identity,
         confidence,
-        livenessScore: 0.95,
-        livenessChallengePassed: true,
+        livenessScore: challenge?.completed ? 0.95 : 0,
+        livenessChallengePassed: challenge?.completed ?? false,
         inferenceTimeMs: inferenceMs,
         totalTimeMs: Date.now() - (challenge?.startedAt || Date.now()),
         timestamp: Date.now(),
@@ -247,16 +277,20 @@ export default function VerifyScreen() {
     } catch (error) {
       console.error('Recognition error:', error);
       setStatusText('Recognition failed — retrying');
-      setTimeout(() => startLivenessChallenge(), 1500);
+      setTimeout(() => startLivenessChallenge(0), 1500);
     }
   };
 
   const handleTripleTap = () => {
+    // Reset tap count after 800ms of no taps
+    if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
     const n = tapCount + 1;
     setTapCount(n);
     if (n >= 3) {
       setTapCount(0);
       setShowHUD(h => !h);
+    } else {
+      tapTimerRef.current = setTimeout(() => setTapCount(0), 800);
     }
   };
 

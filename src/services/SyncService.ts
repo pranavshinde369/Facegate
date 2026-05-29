@@ -1,19 +1,47 @@
 import NetInfo from '@react-native-community/netinfo';
 import axios from 'axios';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import DatabaseService from './DatabaseService';
 
 const AWS_LAMBDA_URL = 'https://your-lambda-endpoint.amazonaws.com/sync';
-const DEVICE_ID_KEY = 'facegate_device_id';
+const DEVICE_ID_STORAGE_KEY = 'facegate_device_id';
 
 class SyncService {
   private isSyncing = false;
   private unsubscribe: (() => void) | null = null;
   private lastSyncTime = 0;
+  private cachedDeviceId: string | null = null;
 
-  getDeviceId(): string {
-    // Simple device ID using timestamp — in production use react-native-keychain
-    const stored = `device_${Date.now().toString(36)}`;
-    return stored;
+  /**
+   * Bug #6 fix: Generate device ID once and persist it.
+   * Previously generated a new ID on every call using Date.now().
+   */
+  async getDeviceId(): Promise<string> {
+    // Return cached value if available
+    if (this.cachedDeviceId) return this.cachedDeviceId;
+
+    try {
+      // Try to read from persistent storage
+      const stored = await AsyncStorage.getItem(DEVICE_ID_STORAGE_KEY);
+      if (stored) {
+        this.cachedDeviceId = stored;
+        return stored;
+      }
+    } catch (e) {
+      // AsyncStorage not available — fall through to generate
+    }
+
+    // Generate new persistent device ID
+    const newId = `device_${Date.now().toString(36)}_${Math.random().toString(36).substr(2, 6)}`;
+
+    try {
+      await AsyncStorage.setItem(DEVICE_ID_STORAGE_KEY, newId);
+    } catch (e) {
+      console.warn('Could not persist device ID:', e);
+    }
+
+    this.cachedDeviceId = newId;
+    return newId;
   }
 
   startListening(): void {
@@ -53,10 +81,11 @@ class SyncService {
 
       console.log(`Syncing ${pendingItems.length} items to AWS...`);
 
+      const deviceId = await this.getDeviceId();
       const response = await axios.post(
         AWS_LAMBDA_URL,
         {
-          deviceId: this.getDeviceId(),
+          deviceId,
           items: pendingItems,
           syncedAt: Date.now(),
         },

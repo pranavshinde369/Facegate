@@ -71,67 +71,63 @@ export default function EnrollScreen() {
         const uri = result.assets?.[0]?.uri;
         if (uri) photos.push(uri);
 
-        // Try real ONNX inference
-        let embedding: number[];
-        let quality = 0.85;
+        // Run real ONNX inference — no mock fallback
+        let embedding: number[] | null = null;
+        let quality = 0;
 
         try {
-          if (uri && InferenceService.isLoaded()) {
-            setStatus(`Processing photo ${i + 1} through AI...`);
-            const imgData = await uriToPixelArray(uri);
-
-            if (imgData) {
-              const detectorInput = InferenceService.prepareDetectorInput(
-                imgData.pixels,
-                imgData.width,
-                imgData.height,
-              );
-              const bbox = await InferenceService.detectFace(detectorInput);
-
-              if (bbox && bbox[4] > 0.5) {
-                quality = bbox[4];
-                const faceInput = InferenceService.prepareFaceInput(
-                  imgData.pixels,
-                  imgData.width,
-                  imgData.height,
-                  bbox,
-                );
-                const realEmbedding = await InferenceService.getEmbedding(faceInput);
-                if (realEmbedding && realEmbedding.length === 128) {
-                  embedding = realEmbedding;
-                  setStatus(`✓ Photo ${i + 1} — face detected (${(quality * 100).toFixed(0)}% confidence)`);
-                } else {
-                  throw new Error('Invalid embedding');
-                }
-              } else {
-                setStatus(`⚠ Photo ${i + 1} — no face detected, using fallback`);
-                throw new Error('No face detected');
-              }
-            } else {
-              throw new Error('Image processing failed');
-            }
+          if (!InferenceService.isLoaded()) {
+            setStatus(`⚠ Photo ${i + 1} — AI models not loaded`);
+          } else if (!uri) {
+            setStatus(`⚠ Photo ${i + 1} — no image captured`);
           } else {
-            throw new Error('Models not loaded');
+            setStatus(`Processing photo ${i + 1} through AI...`);
+
+            // HIGH PERFORMANCE PATH: No pixel data sent over bridge
+            const bbox = await InferenceService.detectFaceFast(uri);
+
+            if (!bbox || bbox[4] <= 0.5) {
+              setStatus(`⚠ Photo ${i + 1} — no face detected, try better lighting`);
+            } else {
+              quality = bbox[4];
+              const realEmbedding = await InferenceService.getEmbeddingFast(uri, bbox);
+              
+              if (realEmbedding && realEmbedding.length === 128) {
+                embedding = realEmbedding;
+                setStatus(`✓ Photo ${i + 1} — face detected (${(quality * 100).toFixed(0)}% confidence)`);
+              } else {
+                setStatus(`⚠ Photo ${i + 1} — embedding extraction failed`);
+              }
+            }
           }
         } catch (inferenceError) {
-          // Fallback to mock embedding if ONNX fails
-          embedding = Array.from(
-            {length: 128},
-            (_, idx) => Math.sin(idx * (i + 1) * 0.1) * 0.5 +
-                        Math.cos(idx * 0.05) * 0.3,
-          );
-          quality = 0.75;
-          setStatus(`✓ Photo ${i + 1} captured (standard mode)`);
+          console.warn(`Inference error on photo ${i + 1}:`, inferenceError);
+          setStatus(`⚠ Photo ${i + 1} — processing error, retake recommended`);
         }
 
-        embeddings.push(embedding);
-        qualities.push(quality);
+        // Only push successful detections
+        if (embedding) {
+          embeddings.push(embedding);
+          qualities.push(quality);
+        }
+      }
+
+      // Require at least 3 successful face detections out of 5 attempts
+      const MIN_SUCCESSFUL = 3;
+      if (embeddings.length < MIN_SUCCESSFUL) {
+        Alert.alert(
+          'Face Detection Failed',
+          `Only ${embeddings.length} of ${REQUIRED_FRAMES} photos had a detectable face.\n` +
+          `Need at least ${MIN_SUCCESSFUL}. Ensure good lighting and face the camera directly.`,
+        );
+        setCapturing(false);
+        return;
       }
 
       setCapturedEmbeddings(embeddings);
       setCapturedPhotos(photos);
       setFrameQualities(qualities);
-      setStatus(`✓ All ${REQUIRED_FRAMES} photos captured! Tap Save Identity.`);
+      setStatus(`✓ ${embeddings.length} faces detected! Tap Save Identity.`);
     } catch (error) {
       setStatus('Capture failed — try again');
       console.error('Capture error:', error);
@@ -141,8 +137,9 @@ export default function EnrollScreen() {
   };
 
   const saveIdentity = async () => {
-    if (capturedEmbeddings.length < REQUIRED_FRAMES) {
-      Alert.alert('Not Ready', 'Please capture face photos first');
+    const MIN_SUCCESSFUL = 3;
+    if (capturedEmbeddings.length < MIN_SUCCESSFUL) {
+      Alert.alert('Not Ready', `Need at least ${MIN_SUCCESSFUL} successful face captures first`);
       return;
     }
 
@@ -265,8 +262,8 @@ export default function EnrollScreen() {
           )}
         </TouchableOpacity>
 
-        {/* Save button */}
-        {capturedEmbeddings.length === REQUIRED_FRAMES && (
+        {/* Save button — show when we have 3+ successful face detections */}
+        {capturedEmbeddings.length >= 3 && (
           <TouchableOpacity
             style={[styles.saveButton, saving && styles.buttonDisabled]}
             onPress={saveIdentity}

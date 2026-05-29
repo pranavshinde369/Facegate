@@ -79,6 +79,27 @@ class InferenceService {
     }
   }
 
+  // HIGH PERFORMANCE: Direct from URI
+  async detectFaceFast(uri: string): Promise<number[] | null> {
+    try {
+      const start = Date.now();
+      const output: number[] = await OnnxModule.detectFaceFromUri(
+        MODELS.DETECTOR,
+        uri,
+      );
+      this.metrics.detectorMs = Date.now() - start;
+
+      // The native method appends originalWidth and originalHeight at the end
+      const originalHeight = output.pop() as number;
+      const originalWidth = output.pop() as number;
+
+      return this.parseBestDetection(output);
+    } catch (error) {
+      console.error('Fast detection error:', error);
+      return null;
+    }
+  }
+
   // Get 128-d face embedding — input is flat float32 array [1,3,112,112]
   async getEmbedding(faceData: number[]): Promise<number[]> {
     try {
@@ -98,6 +119,30 @@ class InferenceService {
       return l2Normalize(output);
     } catch (error) {
       console.error('Embedding error:', error);
+      return [];
+    }
+  }
+
+  // HIGH PERFORMANCE: Direct from URI with normalized bbox
+  async getEmbeddingFast(uri: string, bbox: number[]): Promise<number[]> {
+    try {
+      const start = Date.now();
+      const output: number[] = await OnnxModule.extractEmbeddingFromUri(
+        MODELS.RECOGNIZER,
+        uri,
+        bbox[0],
+        bbox[1],
+        bbox[2],
+        bbox[3]
+      );
+
+      this.metrics.recognizerMs = Date.now() - start;
+      this.metrics.totalInferenceMs =
+        this.metrics.detectorMs + this.metrics.recognizerMs;
+
+      return l2Normalize(output);
+    } catch (error) {
+      console.error('Fast embedding error:', error);
       return [];
     }
   }
