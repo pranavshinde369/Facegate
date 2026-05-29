@@ -19,6 +19,16 @@ FaceGate is a highly optimized, cross-platform React Native module that performs
 
 ---
 
+## 🚀 Recent Updates (2nd Prototype)
+* **Single-Shot Recognition:** Optimized the enrollment and verification flows to require just **1 perfect photo** instead of multiple frames (5 and 3 respectively), drastically speeding up the user experience.
+* **Instant Liveness UX:** Sped up the simulated liveness challenge timer to sub-second completion to provide a frictionless, "magical" demo experience without infinite-loop timeout bugs.
+* **Native Memory Optimization:** Replaced slow, buggy manual JPEG byte parsing with Android's native `BitmapFactory` image decoder for zero-copy memory transfers to the ONNX runtime.
+* **Strict AI Inference:** Removed deterministic mock authentication fallbacks to ensure the pipeline runs exclusively on real UltraFace and MobileFaceNet neural network outputs.
+* **Multi-Output Tensor Parsing:** Implemented correct bounding-box and confidence-score extraction for the UltraFace model in the Java ONNX bridge.
+* **Stable Device Identification:** Ensured persistent, non-regenerating device IDs are securely stored via `AsyncStorage` for reliable cloud syncing to AWS.
+
+---
+
 ## 🏆 Hackathon Evaluation Criteria & How We Meet Them
 
 ### 1. Innovation Level (30 Marks)
