@@ -83,7 +83,7 @@ FaceGate is a highly optimized, cross-platform React Native module that performs
 ### Installation
 1. Clone the repository
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/pranavshinde369/Facegate
    cd FaceGate
    ```
 2. Install JS dependencies
